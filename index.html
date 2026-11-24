@@ -3,19 +3,26 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hello World</title>
+  <meta name="theme-color" content="#82c85c">
+  <meta name="description" content="A horse steps through a torn sheet of paper in an interactive 3D field.">
+  <title>Through the Paper — A 3D Field</title>
   <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="script.js"></script>
 </head>
 <body>
-
-  <h1>yo yo yo</h1>
-  <main>
-    <img src="images/toilet.jpg" alt="Describe your image here">
+  <main class="field" aria-label="Interactive 3D paper field">
+    <div class="field__canvas" id="scene" aria-hidden="true"></div>
+    <div class="field-note field-note--right" aria-hidden="true">
+      <span class="field-note__rule"></span>
+      </div>
   </main>
-  <h2>WASSUP</h2>
-
-  
-
-  <script src="script.js"></script>
 </body>
 </html>
