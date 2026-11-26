@@ -1,155 +1,223 @@
 import * as THREE from "three";
-import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+import { MTLLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/MTLLoader.js";
+import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/OBJLoader.js";
 
-const mount = document.querySelector("#scene");
-const status = document.querySelector("#status");
-const green = 0x82c85c;
+const stage = document.querySelector(".animation__stage");
+const replayButton = document.querySelector(".replay");
+const assetPath = new URL("./assets/", import.meta.url).href;
+const holdDuration = 550;
+const animationDuration = 2650;
+const cameraFov = 22;
+
+const pieces = [
+  { model: "red-house-1.obj", material: "red-house-1.mtl", object: "Cube" },
+  { model: "red-house-2.obj", material: "red-house-2.mtl", object: "Cube.005" },
+  { model: "red-house-3.obj", material: "red-house-3.mtl", object: "Cube.002" },
+  { model: "red-house-4.obj", material: "red-house-4.mtl", object: "Cube.003" },
+  { model: "red-house-5.obj", material: "red-house-5.mtl", object: "Cube.004" }
+];
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(green);
+scene.background = new THREE.Color(0x000000);
 
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 120);
-let cameraDistance = 11.6;
-const cameraTarget = new THREE.Vector3(0, 0.15, 0);
-const desiredCameraPosition = new THREE.Vector3();
-const currentPointer = new THREE.Vector2();
-const targetPointer = new THREE.Vector2();
-const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const stage = new THREE.Group();
-scene.add(stage);
+const camera = new THREE.PerspectiveCamera(cameraFov, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);
+camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setClearColor(0x000000, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.NoToneMapping;
-renderer.setClearColor(green);
-mount.appendChild(renderer.domElement);
+stage.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xf5f2e9, 0x323d2e, 1.7));
+const loadingManager = new THREE.LoadingManager();
+const loadedMaterials = new Set();
+const animatedMeshes = [];
+let textureLoadFailed = false;
+let animationStartTime = null;
 
-const keyLight = new THREE.DirectionalLight(0xfff4df, 3.2);
-keyLight.position.set(-4, 6, 8);
-scene.add(keyLight);
+function applyTextureFallback() {
+  if (!textureLoadFailed) return;
 
-const fillLight = new THREE.DirectionalLight(0xdce9ff, 1.5);
-fillLight.position.set(5, 2, 4);
-scene.add(fillLight);
+  loadedMaterials.forEach((material) => {
+    if (material.map) {
+      material.map.dispose();
+      material.map = null;
+    }
 
-const rimLight = new THREE.DirectionalLight(0xffffff, 2.2);
-rimLight.position.set(1, 5, -6);
-scene.add(rimLight);
-
-const fieldMaterial = new THREE.MeshBasicMaterial({ color: green });
-const fieldPlane = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), fieldMaterial);
-fieldPlane.position.z = -4.8;
-scene.add(fieldPlane);
-
-function resize() {
-  const width = mount.clientWidth;
-  const height = mount.clientHeight;
-  const portrait = width <= 700;
-  renderer.setSize(width, height, false);
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  cameraDistance = portrait ? 22.5 : 11.6;
-  stage.position.y = portrait ? -0.65 : 0;
-  document.documentElement.classList.toggle("portrait-field", portrait);
-  if (paper) updatePaperGeometry(portrait);
+    material.color.set(0xb6424b);
+    material.needsUpdate = true;
+  });
 }
 
-function setPointerPosition(event) {
-  targetPointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-  targetPointer.y = (event.clientY / window.innerHeight) * 2 - 1;
+loadingManager.onError = (url) => {
+  if (url.toLowerCase().includes("house-design.png")) {
+    if (!textureLoadFailed) {
+      console.error(`Missing material texture: ${url}. Expected images/house-design.png.`);
+    }
+
+    textureLoadFailed = true;
+    applyTextureFallback();
+    return;
+  }
+
+  console.error(`Unable to load 3D asset: ${url}`);
+};
+
+function findMesh(root, name) {
+  let match;
+  root.traverse((child) => {
+    if (child.isMesh && child.name === name) match = child;
+  });
+
+  if (!match) {
+    throw new Error(`The OBJ file does not contain the expected object "${name}".`);
+  }
+
+  return match;
+}
+
+function verifyPositionMatch(sourceMesh, referenceMesh, description) {
+  const source = sourceMesh.geometry.getAttribute("position").array;
+  const reference = referenceMesh.geometry.getAttribute("position").array;
+
+  if (source.length !== reference.length) {
+    throw new Error(`${description} does not match the reference model topology.`);
+  }
+
+  for (let index = 0; index < source.length; index += 1) {
+    if (Math.abs(source[index] - reference[index]) > 1e-5) {
+      throw new Error(`${description} does not match the reference model positions.`);
+    }
+  }
+}
+
+function convertMaterialsToBasic(root) {
+  root.traverse((child) => {
+    if (!child.isMesh) return;
+
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    const basicMaterials = materials.map((material) => {
+      const basicMaterial = new THREE.MeshBasicMaterial({
+        color: material.color.clone(),
+        map: material.map,
+        alphaMap: material.alphaMap,
+        opacity: material.opacity,
+        transparent: material.transparent,
+        alphaTest: material.alphaTest,
+        depthWrite: material.depthWrite,
+        side: material.side
+      });
+
+      loadedMaterials.add(basicMaterial);
+      return basicMaterial;
+    });
+
+    child.material = Array.isArray(child.material) ? basicMaterials : basicMaterials[0];
+  });
+
+  applyTextureFallback();
+}
+
+async function loadPiece(piece) {
+  const root = await loadModel(piece.model, piece.material);
+  const mesh = findMesh(root, piece.object);
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+async function loadModel(model, material) {
+  const materialCreator = await new MTLLoader(loadingManager)
+    .setPath(assetPath)
+    .loadAsync(material);
+  materialCreator.preload();
+
+  const root = await new OBJLoader(loadingManager)
+    .setMaterials(materialCreator)
+    .setPath(assetPath)
+    .loadAsync(model);
+  convertMaterialsToBasic(root);
+  return root;
+}
+
+function setProgress(progress) {
+  animatedMeshes.forEach((mesh) => {
+    const position = mesh.geometry.getAttribute("position");
+    const start = mesh.userData.startPositions;
+    const end = mesh.userData.endPositions;
+
+    for (let index = 0; index < position.array.length; index += 1) {
+      position.array[index] = start[index] + (end[index] - start[index]) * progress;
+    }
+
+    position.needsUpdate = true;
+  });
+}
+
+function playAnimation() {
+  setProgress(0);
+  animationStartTime = performance.now() + holdDuration;
+}
+
+function resize() {
+  const width = Math.max(window.innerWidth, 1);
+  const height = Math.max(window.innerHeight, 1);
+  const aspect = width / height;
+  const halfFovTangent = Math.tan(THREE.MathUtils.degToRad(cameraFov / 2));
+  const cameraDistance = Math.max(24, 6.7 / (2 * halfFovTangent * aspect));
+
+  renderer.setSize(width, height, false);
+  camera.aspect = aspect;
+  camera.position.set(0, -cameraDistance, 0);
+  camera.lookAt(0, 0, 0.15);
+  camera.updateProjectionMatrix();
+}
+
+async function initialize() {
+  const [firstState, finalState] = await Promise.all([
+    loadModel("first-state-3d.obj", "first-state-3d.mtl"),
+    loadModel("final-state-3d.obj", "final-state-3d.mtl")
+  ]);
+  const loadedPieces = await Promise.all(pieces.map(loadPiece));
+
+  pieces.forEach((piece, index) => {
+    const mesh = loadedPieces[index];
+    const startPosition = mesh.geometry.getAttribute("position");
+    const firstStateMesh = findMesh(firstState, piece.object);
+    const finalStateMesh = findMesh(finalState, piece.object);
+    const finalPosition = finalStateMesh.geometry.getAttribute("position");
+
+    verifyPositionMatch(mesh, firstStateMesh, piece.model);
+
+    if (startPosition.array.length !== finalPosition.array.length) {
+      throw new Error(`${piece.model} and final-state-3d.obj have incompatible geometry.`);
+    }
+
+    mesh.userData.startPositions = startPosition.array.slice();
+    mesh.userData.endPositions = finalPosition.array.slice();
+    scene.add(mesh);
+    animatedMeshes.push(mesh);
+  });
+
+  setProgress(0);
+  replayButton.disabled = false;
+  playAnimation();
 }
 
 window.addEventListener("resize", resize);
-window.addEventListener("pointermove", setPointerPosition, { passive: true });
-window.addEventListener("pointerleave", () => targetPointer.set(0, 0), { passive: true });
-
-let paper;
-let paperTexture;
-const paperWidth = 10.4;
-const paperHeight = paperWidth * (700 / 1515);
-
-function updatePaperGeometry(portrait) {
-  paper.geometry.dispose();
-  paper.geometry = portrait
-    ? new THREE.PlaneGeometry(paperHeight, paperWidth)
-    : new THREE.PlaneGeometry(paperWidth, paperHeight);
-  paperTexture.rotation = portrait ? Math.PI / 2 : 0;
-  paperTexture.center.set(0.5, 0.5);
-  paperTexture.updateMatrix();
-}
-
+replayButton.addEventListener("click", playAnimation);
 resize();
 
-async function loadSceneAssets() {
-  const textureLoader = new THREE.TextureLoader();
-  paperTexture = await new Promise((resolve, reject) => {
-    textureLoader.load("./assets/Paper-tear-transparent.png", resolve, undefined, reject);
-  });
-  paperTexture.colorSpace = THREE.SRGBColorSpace;
-  paperTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+renderer.setAnimationLoop((time) => {
+  if (animationStartTime !== null && time >= animationStartTime) {
+    const elapsed = Math.min((time - animationStartTime) / animationDuration, 1);
+    const eased = 1 - (1 - elapsed) ** 3;
+    setProgress(eased);
 
-  paper = new THREE.Mesh(
-    new THREE.PlaneGeometry(paperWidth, paperHeight),
-    new THREE.MeshBasicMaterial({
-      map: paperTexture,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    })
-  );
-  paper.position.z = 0;
-  stage.add(paper);
-  updatePaperGeometry(window.innerWidth <= 700);
-
-  const horse = await new Promise((resolve, reject) => {
-    new OBJLoader().load("./assets/horse.obj", resolve, undefined, reject);
-  });
-
-  const bounds = new THREE.Box3().setFromObject(horse);
-  if (bounds.isEmpty()) {
-    throw new Error("The horse model does not contain any geometry.");
+    if (elapsed === 1) animationStartTime = null;
   }
 
-  const center = bounds.getCenter(new THREE.Vector3());
-  const size = bounds.getSize(new THREE.Vector3());
-  const scale = 3.35 / size.y;
-
-  horse.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-  horse.scale.setScalar(scale);
-  horse.traverse((part) => {
-    if (!part.isMesh) return;
-    part.material = new THREE.MeshStandardMaterial({
-      color: 0x191c1a,
-      roughness: 0.44,
-      metalness: 0.18
-    });
-  });
-  stage.add(horse);
-  status.textContent = "Move your cursor to explore";
-}
-
-function animate() {
-  requestAnimationFrame(animate);
-
-  const easing = reducedMotion ? 1 : 0.055;
-  currentPointer.lerp(targetPointer, easing);
-  const yaw = currentPointer.x * 0.48;
-  const pitch = currentPointer.y * 0.2;
-  desiredCameraPosition.set(
-    Math.sin(yaw) * cameraDistance,
-    0.45 - pitch * 2.4,
-    Math.cos(yaw) * cameraDistance
-  );
-  camera.position.lerp(desiredCameraPosition, easing);
-  camera.lookAt(cameraTarget);
   renderer.render(scene, camera);
-}
-
-loadSceneAssets().catch((error) => {
-  console.error("Unable to load the 3D paper field.", error);
-  status.textContent = "The scene could not be loaded";
 });
 
-animate();
+initialize();
