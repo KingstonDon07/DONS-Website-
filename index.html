@@ -17,7 +17,37 @@
 </head>
 <body>
   <main class="animation" aria-label="Red house panels separating">
+    <div class="year-reveal" aria-hidden="true">
+      <span class="year-reveal__text">1962</span>
+    </div>
     <div class="animation__stage" aria-hidden="true"></div>
+    <svg class="film-grain" aria-hidden="true" focusable="false">
+      <filter id="grain-filter">
+        <feTurbulence
+          type="fractalNoise"
+          baseFrequency="0.85"
+          numOctaves="2"
+          stitchTiles="stitch"
+        />
+        <feColorMatrix type="saturate" values="0" />
+      </filter>
+      <rect width="100%" height="100%" filter="url(#grain-filter)" />
+    </svg>
+    <form class="date-unlock" novalidate>
+      <label class="visually-hidden" for="unlock-date">Enter date</label>
+      <input
+        id="unlock-date"
+        name="date"
+        type="text"
+        inputmode="numeric"
+        autocomplete="off"
+        maxlength="4"
+        placeholder="DATE"
+        aria-describedby="date-unlock-status"
+      >
+      <button type="submit">Unlock</button>
+      <span class="date-unlock__status" id="date-unlock-status" aria-live="polite"></span>
+    </form>
     <button class="replay" type="button" disabled>Replay</button>
   </main>
 </body>
