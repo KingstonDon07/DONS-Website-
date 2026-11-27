@@ -145,35 +145,6 @@ body {
   border: 0;
 }
 
-.replay {
-  position: absolute;
-  z-index: 4;
-  bottom: clamp(18px, 3.2vh, 32px);
-  left: 50%;
-  padding: 10px 18px;
-  border: 1px solid #858585;
-  border-radius: 0;
-  background: #000;
-  color: #fff;
-  font: 13px Arial, sans-serif;
-  cursor: pointer;
-  transform: translateX(-50%);
-}
-
-.replay:hover:not(:disabled),
-.replay:focus-visible {
-  border-color: #fff;
-}
-
-.replay:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 4px;
-}
-
-.replay:disabled {
-  cursor: wait;
-}
-
 body.unlocked {
   background: #fff;
   color: #000;

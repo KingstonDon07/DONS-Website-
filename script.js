@@ -3,7 +3,6 @@ import { MTLLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/j
 import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/OBJLoader.js";
 
 const stage = document.querySelector(".animation__stage");
-const replayButton = document.querySelector(".replay");
 const yearReveal = document.querySelector(".year-reveal");
 const grainOverlay = document.querySelector(".film-grain");
 const dateUnlockForm = document.querySelector(".date-unlock");
@@ -13,6 +12,7 @@ const assetPath = new URL("./assets/", import.meta.url).href;
 const holdDuration = 550;
 const animationDuration = 2650;
 const restitution = 0.58;
+const collisionBoundsScale = 0.58;
 const returnDelay = 15000;
 const returnDuration = 900;
 const cameraFov = 22;
@@ -53,6 +53,8 @@ let animationStartTime = null;
 let interactionEnabled = false;
 let draggedMesh = null;
 let draggedPointerId = null;
+let awaitingAnimationStart = false;
+let animationStartPointerId = null;
 let lastPointer = null;
 let pointerDownPosition = null;
 let grainClickCandidate = false;
@@ -225,6 +227,21 @@ function getScreenBounds(mesh) {
   return screenBounds;
 }
 
+function getCollisionBounds(mesh) {
+  const bounds = getScreenBounds(mesh);
+  const centerX = (bounds.left + bounds.right) / 2;
+  const centerY = (bounds.top + bounds.bottom) / 2;
+  const halfWidth = (bounds.right - bounds.left) * collisionBoundsScale / 2;
+  const halfHeight = (bounds.bottom - bounds.top) * collisionBoundsScale / 2;
+
+  return {
+    left: centerX - halfWidth,
+    right: centerX + halfWidth,
+    top: centerY - halfHeight,
+    bottom: centerY + halfHeight
+  };
+}
+
 function constrainToViewport(mesh, bounce) {
   const bounds = getScreenBounds(mesh);
   const width = renderer.domElement.clientWidth;
@@ -296,8 +313,8 @@ function resolvePieceCollisions() {
         !secondIsDragged
       ) continue;
 
-      const firstBounds = getScreenBounds(first);
-      const secondBounds = getScreenBounds(second);
+      const firstBounds = getCollisionBounds(first);
+      const secondBounds = getCollisionBounds(second);
       const overlapX = Math.min(firstBounds.right, secondBounds.right) - Math.max(firstBounds.left, secondBounds.left);
       const overlapY = Math.min(firstBounds.bottom, secondBounds.bottom) - Math.max(firstBounds.top, secondBounds.top);
       if (overlapX <= 0 || overlapY <= 0) continue;
@@ -417,6 +434,15 @@ function pointerToNdc(event) {
   );
 }
 
+function pointerHitsMesh(event, mesh) {
+  if (!mesh) return false;
+
+  pointerToNdc(event);
+  modelRoot.updateMatrixWorld(true);
+  raycaster.setFromCamera(pointer, camera);
+  return raycaster.intersectObject(mesh, false).length > 0;
+}
+
 function isCenterHitOnSecondPiece(event) {
   const secondPiece = animatedMeshes[1];
   if (!interactionEnabled || !secondPiece) return false;
@@ -433,18 +459,16 @@ function isCenterHitOnSecondPiece(event) {
 
   if (!inCenter) return false;
 
-  pointerToNdc(event);
-  modelRoot.updateMatrixWorld(true);
-  raycaster.setFromCamera(pointer, camera);
-  return raycaster.intersectObject(secondPiece, false).length > 0;
+  return pointerHitsMesh(event, secondPiece);
 }
 
 function updateYearReveal(event) {
   const visible = isCenterHitOnSecondPiece(event);
+  const canStart = !interactionEnabled && animationStartTime === null && pointerHitsMesh(event, animatedMeshes[0]);
   yearReveal.classList.toggle("is-visible", visible);
 
   if (!draggedMesh) {
-    renderer.domElement.style.cursor = visible ? "pointer" : interactionEnabled ? "grab" : "default";
+    renderer.domElement.style.cursor = visible || canStart ? "pointer" : interactionEnabled ? "grab" : "default";
   }
 }
 
@@ -467,7 +491,19 @@ function triggerGrain() {
 }
 
 function onPointerDown(event) {
-  if (!interactionEnabled || event.button !== 0) return;
+  if (event.button !== 0) return;
+
+  if (!interactionEnabled) {
+    if (animationStartTime !== null || !pointerHitsMesh(event, animatedMeshes[0])) return;
+
+    event.preventDefault();
+    awaitingAnimationStart = true;
+    animationStartPointerId = event.pointerId;
+    pointerDownPosition = { x: event.clientX, y: event.clientY };
+    renderer.domElement.setPointerCapture(event.pointerId);
+    renderer.domElement.style.cursor = "grabbing";
+    return;
+  }
 
   pointerToNdc(event);
   modelRoot.updateMatrixWorld(true);
@@ -512,6 +548,23 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  if (awaitingAnimationStart && event.pointerId === animationStartPointerId) {
+    const shouldStart =
+      event.type === "pointerup" &&
+      pointerDownPosition &&
+      Math.hypot(
+        event.clientX - pointerDownPosition.x,
+        event.clientY - pointerDownPosition.y
+      ) <= 6;
+
+    awaitingAnimationStart = false;
+    animationStartPointerId = null;
+    pointerDownPosition = null;
+    if (shouldStart) playAnimation();
+    else updateYearReveal(event);
+    return;
+  }
+
   if (!draggedMesh || event.pointerId !== draggedPointerId) return;
 
   const wasClick =
@@ -538,6 +591,8 @@ function playAnimation() {
   interactionEnabled = false;
   draggedMesh = null;
   draggedPointerId = null;
+  awaitingAnimationStart = false;
+  animationStartPointerId = null;
   lastPointer = null;
   pointerDownPosition = null;
   grainClickCandidate = false;
@@ -601,8 +656,7 @@ async function initialize() {
   });
 
   setProgress(0);
-  replayButton.disabled = false;
-  playAnimation();
+  renderer.domElement.style.cursor = "default";
 }
 
 dateUnlockForm.addEventListener("submit", (event) => {
@@ -625,7 +679,6 @@ dateUnlockInput.addEventListener("input", () => {
 });
 
 window.addEventListener("resize", resize);
-replayButton.addEventListener("click", playAnimation);
 renderer.domElement.addEventListener("pointerdown", onPointerDown);
 renderer.domElement.addEventListener("pointermove", onPointerMove);
 renderer.domElement.addEventListener("pointerup", onPointerUp);
